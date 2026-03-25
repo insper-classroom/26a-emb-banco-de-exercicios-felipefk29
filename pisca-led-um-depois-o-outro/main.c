@@ -10,6 +10,8 @@ const int LED_PIN_B = 14;
 const int BTN_PIN_Y = 26;
 const int BTN_PIN_B = 19;
 
+volatile int btn_y_flag;
+
 
 int main()
 {
