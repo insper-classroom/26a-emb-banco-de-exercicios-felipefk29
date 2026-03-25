@@ -5,139 +5,165 @@
 #include "hardware/timer.h"
 #include "pico/stdlib.h"
 
-const int BTN_PIN_G = 28;
-const int BTN_PIN_Y = 26;
+#define DEBOUNCE_US 400000  // 400ms
 
-const int LED_PIN_G = 5;
-const int LED_PIN_Y = 9;
-const int LED_PIN_R = 13;
 
-volatile int btn_f = 0;
-volatile int g_timer_g = 0;
-volatile int g_timer_y = 0;
-volatile int g_timer_r = 0;
-volatile int g_fired_g = 0;
-volatile int g_fired_y = 0;
+const int BTN_YELLOW_PIN = 14;
+const int BTN_GREEN_PIN = 13;
+
+const int LED_GREEN_PIN = 18;
+const int LED_YELLOW_PIN = 17;
+
+volatile int btn_green_flag;
+volatile int btn_yellow_flag;
+
+
+volatile int alarm_flag_1 = 0;
+volatile int alarm_flag_2 = 0;
+
+volatile int g_timer_0 = 0;
+volatile int g_timer_1 = 0;
+
+volatile uint64_t last_btn_green_time = 0;
+volatile uint64_t last_btn_yellow_time = 0;
+
+
+
+
+
+int64_t alarm_1_callback(alarm_id_t id, void *user_data) {
+    alarm_flag_1 = 1;
+    return 0;
+}
+
+int64_t alarm_2_callback(alarm_id_t id, void *user_data) {
+    alarm_flag_2 = 1;
+    return 0;
+}
+
+bool timer_0_callback(repeating_timer_t *rt) {
+    g_timer_0= 1;
+    return true; // repetir
+}
+bool timer_1_callback(repeating_timer_t *rt) {
+    g_timer_1 = 1;
+    return true; // keep repeating
+}
 
 
 void btn_callback(uint gpio, uint32_t events) {
-    if (events == 0x4) {  // fall edge
-        btn_f = gpio;
-    } else if (events == 0x8) {  // rise edge
+    if (events == 0x4) {
+        uint64_t now = time_us_64();
+        if (gpio == BTN_GREEN_PIN && (now - last_btn_green_time) > DEBOUNCE_US) {
+            btn_green_flag = 1;
+            last_btn_green_time = now;
+        } else if (gpio == BTN_YELLOW_PIN && (now - last_btn_yellow_time) > DEBOUNCE_US) {
+            last_btn_yellow_time = now;
+            btn_yellow_flag = 1;
+        }
     }
 }
 
-bool timer_g_callback(repeating_timer_t *rt) {
-    g_timer_g = 1;
-    return true;  // keep repeating
-}
 
-bool timer_y_callback(repeating_timer_t *rt) {
-    g_timer_y = 1;
-    return true;  // keep repeating
-}
+void setup(){
+    gpio_init(BTN_GREEN_PIN);
+    gpio_set_dir(BTN_GREEN_PIN, GPIO_IN);
+    gpio_pull_up(BTN_GREEN_PIN);
 
-bool timer_r_callback(repeating_timer_t *rt) {
-    g_timer_r = 1;
-    return true;  // keep repeating
-}
+    gpio_init(BTN_YELLOW_PIN);
+    gpio_set_dir(BTN_YELLOW_PIN, GPIO_IN);
+    gpio_pull_up(BTN_YELLOW_PIN);
 
-int64_t alarm_g_callback(alarm_id_t id, void *user_data) {
-    g_fired_g = 1;
-    return 0;
-}
+    gpio_init(LED_YELLOW_PIN);
+    gpio_set_dir(LED_YELLOW_PIN, GPIO_OUT);
 
-int64_t alarm_y_callback(alarm_id_t id, void *user_data) {
-    g_fired_y = 1;
-    return 0;
+    gpio_init(LED_GREEN_PIN);
+    gpio_set_dir(LED_GREEN_PIN, GPIO_OUT);
+
+    gpio_set_irq_enabled_with_callback(BTN_GREEN_PIN, GPIO_IRQ_EDGE_FALL, true, &btn_callback);
+    gpio_set_irq_enabled(BTN_YELLOW_PIN, GPIO_IRQ_EDGE_FALL, true);
 }
 
 int main() {
     stdio_init_all();
+    setup();
+    alarm_id_t alarm_1;
+    alarm_id_t alarm_2;
+    repeating_timer_t timer_0;
+    repeating_timer_t timer_1;
 
-    gpio_init(BTN_PIN_G);
-    gpio_set_dir(BTN_PIN_G, GPIO_IN);
-    gpio_pull_up(BTN_PIN_G);
-    gpio_set_irq_enabled_with_callback(BTN_PIN_G, GPIO_IRQ_EDGE_FALL, true,
-                                       &btn_callback);
+    int led_state_g = 0;
+    int led_state_y = 0;
 
-    gpio_init(BTN_PIN_Y);
-    gpio_set_dir(BTN_PIN_Y, GPIO_IN);
-    gpio_pull_up(BTN_PIN_Y);
-    gpio_set_irq_enabled_with_callback(BTN_PIN_Y, GPIO_IRQ_EDGE_FALL, true,
-                                       &btn_callback);
+    int timer_0_running = 0;
+    int timer_1_running = 0;
 
-    gpio_init(LED_PIN_G);
-    gpio_set_dir(LED_PIN_G, GPIO_OUT);
-
-    gpio_init(LED_PIN_Y);
-    gpio_set_dir(LED_PIN_Y, GPIO_OUT);
-
-    gpio_init(LED_PIN_R);
-    gpio_set_dir(LED_PIN_R, GPIO_OUT);
-
-    repeating_timer_t timer_g;
-    if (!add_repeating_timer_ms(100, timer_g_callback, NULL, &timer_g)) {
-        printf("Failed to add timer\n");
-    }
-
-    repeating_timer_t timer_y;
-    if (!add_repeating_timer_ms(200, timer_y_callback, NULL, &timer_y)) {
-        printf("Failed to add timer\n");
-    }
-
-    int led_g = 0;
-    int led_y = 0;
-
-    int alarm_enable_g = 0;
-    int alarm_enable_y = 0;
-
-    alarm_id_t alarm_g = NULL;
-    alarm_id_t alarm_y = NULL;
 
     while (1) {
-        if (g_timer_g && alarm_enable_g) {
-            led_g = !led_g;
-            gpio_put(LED_PIN_G, led_g);
-            g_timer_g = 0;
-        } else if (alarm_enable_g == 0) {
-            gpio_put(LED_PIN_G, 0);
+//---------------------------- VERDE -------------------------------------
+        if(btn_green_flag){
+            alarm_flag_1 = 0;
+            btn_green_flag =0;
+            if (!timer_0_running && alarm_flag_1 == 0){
+                alarm_1 = add_alarm_in_ms(1000, alarm_1_callback, NULL, false);
+                add_repeating_timer_ms(200, timer_0_callback, NULL, &timer_0);
+                timer_0_running = 1;
+            } 
         }
-
-        if (g_timer_y && alarm_enable_y) {
-            led_y = !led_y;
-            gpio_put(LED_PIN_Y, led_y);
-            g_timer_y = 0;
-        } else if (alarm_enable_y == 0) {
-            gpio_put(LED_PIN_Y, 0);
-        }
-
-        if (btn_f == BTN_PIN_G) {
-            if (alarm_enable_g == 0) {
-                alarm_g = add_alarm_in_ms(1000, alarm_g_callback, NULL, false);
-                alarm_enable_g = 1;
+        if(alarm_flag_1){
+            if(timer_0_running && timer_1_running){
+                led_state_y = 0;
+                cancel_repeating_timer(&timer_1);
+                cancel_alarm(alarm_2);
+                timer_1_running = false;
+                alarm_flag_2 = 0;
+                gpio_put(LED_YELLOW_PIN, led_state_y);
             }
-            btn_f = 0;
+            cancel_repeating_timer(&timer_0);
+            timer_0_running = false;
+            led_state_g = 0;
+            alarm_flag_1 = 0;
+            gpio_put(LED_GREEN_PIN, led_state_g);
         }
 
-        if (btn_f == BTN_PIN_Y) {
-            if (alarm_enable_y == 0) {
-                alarm_y = add_alarm_in_ms(2000, alarm_y_callback, NULL, false);
-                alarm_enable_y = 1;
+//----------------------------- AMARELO --------------------------------------
+
+
+        if(btn_yellow_flag){
+            alarm_flag_2 = 0;
+            btn_yellow_flag =0;
+            if (!timer_1_running && alarm_flag_2 == 0){
+                alarm_2 = add_alarm_in_ms(2000, alarm_2_callback, NULL, false);
+                add_repeating_timer_ms(500, timer_1_callback, NULL, &timer_1);
+                timer_1_running = 1;
+            } 
+        }
+        if(alarm_flag_2){
+            if(timer_0_running && timer_1_running){
+                led_state_g = 0;
+                alarm_flag_1 = 0;
+                cancel_repeating_timer(&timer_0);
+                cancel_alarm(alarm_1);
+                timer_0_running = false;
+                gpio_put(LED_GREEN_PIN, led_state_g);
             }
-            btn_f = 0;
+            cancel_repeating_timer(&timer_1);
+            timer_1_running = false;
+            led_state_y = 0;
+            alarm_flag_2 = 0;
+            gpio_put(LED_YELLOW_PIN, led_state_y);
         }
 
-        if (g_fired_g == 1 ||g_fired_y == 1 ) {
-            g_fired_g = 0;
-            alarm_enable_g = 0;
-
-            g_fired_y = 0;
-            alarm_enable_y = 0;
-            cancel_alarm(alarm_y);
-            cancel_alarm(alarm_g);
+        if(g_timer_0){
+            g_timer_0 = 0;
+            led_state_g = !led_state_g;
+            gpio_put(LED_GREEN_PIN, led_state_g);
         }
-
+        if(g_timer_1){
+            g_timer_1 = 0;
+            led_state_y = !led_state_y;
+            gpio_put(LED_YELLOW_PIN, led_state_y);
+        }
     }
 
     return 0;
